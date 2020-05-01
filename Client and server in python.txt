@@ -1,0 +1,218 @@
+#By Andrew Springer
+#To run Router.py do, sudo fuser -k 6653/tcp
+
+from scapy.all import *
+import sys
+import socket
+import fcntl
+
+ETH_P_ALL=3
+broadcast = "ff:ff:ff:ff:ff:ff"
+
+def ARP_E(interface, destIP):
+    src_mac = get_if_hwaddr(interface)
+
+    arppkt = Ether()/ARP()
+    arppkt[ARP].hwsrc = src_mac
+    arppkt[Ether].dst=broadcast
+    arppkt[ARP].pdst=destIP
+
+    #sendp(arppkt)
+    recv, send = srp(arppkt, iface=interface, verbose=True)
+
+    for s,r in recv:
+        line = r.sprintf("Recieved ARP from %ARP.psrc% with MAC : %Ether.src%\n")
+        hw = r.sprintf("%Ether.src%")
+        print(line)
+        return hw
+
+def Eth_S(interface, dest_HWaddr, payload):
+    src_mac = get_if_hwaddr(interface)
+
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+    s.bind((interface, 0))
+    typee = "\x08\x01"
+
+    s.send(dest_HWaddr + src_mac + typee + payload)
+
+
+def Eth_SIP(interface, dest_HWaddr, payload, destIP, selfip):
+    src_mac = get_if_hwaddr(interface)
+
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+    s.bind((interface, 0))
+    eth_header = Ether(dst=dest_HWaddr,type=0x0800)
+    ip_header = IP(src=selfip,dst=destIP)
+    Packet = eth_header / ip_header / Raw(load=payload)
+
+    sendp(Packet)
+    #typee = "\x08\x00"
+    #print
+    #e_p = dest_HWaddr
+    #e_p += src_mac
+    #e_p += b'\x08\x00' # type
+    #print(e_p)
+    #print(dest_HWaddr + src_mac + typee + payload)
+    #ip_header = b'\x45\x00\x00\x28' # version, IHL, Type of service, total length
+    #ip_header += b'\xab\x00\x00\x00' # ID, flags, fragment offset
+    #ip_header += b'\x40\x06\xa6\xec' # TTL, protocol, checksum
+    #ip_header += selfip # self address
+    #ip_header += destIP # destination ip
+    #s.send(e_p + ip_header)
+    #print e_p + ip_header
+
+def Eth_R(interface):
+    s=socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+    s.bind((interface, 0))
+    r=s.recv(2000)
+    print(r)
+    l=0
+    t = False
+
+    for i in r:
+        if i == '.' :
+            t = True
+        elif i == ':' :
+            if t == True :
+                l = l - 2
+                break
+
+            t = False
+            break
+            
+        l = l + 1
+    
+    print(l)
+    
+    if(t == False):
+        print("Source: %s"%[r[i:i+17] for i in range(0, 17, 17)])
+        print("Target: %s"%[r[i:i+17] for i in range(17, 34, 17)])
+        print("Type: %s"%[r[i:i+2] for i in range(34, 36, 2)])
+        print("Packet: %s"%r[36:])
+    else:
+        print("Source: %s"%[r[i:i+l] for i in range(0, l, l)])
+        print("Target: %s"%[r[i:i+17] for i in range(l, l+17, 17)])
+        print("Type: %s"%[r[i:i+2] for i in range(l+17, l+19, 2)])
+        print("Packet: %s"%r[l+19:])
+
+def IP_R(interface):
+    s=socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+    s.bind((interface, 0))
+    r=s.recv(2000)
+    t = False
+    for i in range(0, 5):
+        if r[i] == '.' :
+            t = True
+            break
+
+    if t == False:
+        print(r)
+        print("Payload: %s"%r[34:])
+    else:
+        print(r)
+        print("Payload: %s"%r[32:])
+
+def IP_S(interface, destIP, payload):
+    IPAddr = socket.inet_ntoa(fcntl.ioctl(socket.socket(socket.AF_INET, socket.SOCK_DGRAM), 0x8915, struct.pack('256s', interface[:15]))[20:24])
+    netm = socket.inet_ntoa(fcntl.ioctl(socket.socket(socket.AF_INET, socket.SOCK_DGRAM), 35099, struct.pack('256s', interface))[20:24])
+    print("Self net: " + netm)
+    print("Self IP : " + IPAddr)
+    print("Dest IP : " + destIP)
+    selfip = IPAddr.split('.')
+    destip = destIP.split('.')
+    netms = netm.split('.')
+    routerip = selfip
+    print(selfip)
+    print(destip)
+    print(netms)
+    t = True
+
+    for i in range(0, len(netms)):
+        if netms[i] == '0' and i == 3:
+            routerip[i] = '1'
+        
+        if netms[i] == '255' and selfip[i] != destip[i]:
+            t = False
+
+    print("IS on local network: ", t)
+    print(routerip)
+    Routerip = (routerip[0] + "." + routerip[1] + "." + routerip[2] + "." + routerip[3])
+
+    if t == False:
+        dstethr = ARP_E(interface, Routerip)
+        print(dstethr)
+        Eth_SIP(interface, dstethr, payload, destIP, IPAddr)
+    elif t == True:
+        Eth_S(interface, destIP, payload)
+
+def IP_SR(interface, destIP, RouterIP, payload):
+    IPAddr = socket.inet_ntoa(fcntl.ioctl(socket.socket(socket.AF_INET, socket.SOCK_DGRAM), 0x8915, struct.pack('256s', interface[:15]))[20:24])
+    netm = socket.inet_ntoa(fcntl.ioctl(socket.socket(socket.AF_INET, socket.SOCK_DGRAM), 35099, struct.pack('256s', interface))[20:24])
+    print("Self net: " + netm)
+    print("Self IP : " + IPAddr)
+    print("Dest IP : " + destIP)
+    selfip = IPAddr.split('.')
+    destip = destIP.split('.')
+    netms = netm.split('.')
+    routerip = selfip
+    print(selfip)
+    print(destip)
+    print(netms)
+    t = True
+
+    for i in range(0, len(netms)):
+        if netms[i] == '0' and i == 3:
+            routerip[i] = '1'
+        
+        if netms[i] == '255' and selfip[i] != destip[i]:
+            t = False
+
+    print("IS on local network: ", t)
+    print(RouterIP)
+    Routerip = (routerip[0] + "." + routerip[1] + "." + routerip[2] + "." + routerip[3])
+    print(Routerip)
+    
+    if t == False:
+        dstethr = ARP_E(interface, RouterIP)
+        print(dstethr)
+        Eth_SIP(interface, dstethr, payload, destIP, IPAddr)
+    elif t == True:
+        Eth_S(interface, destIP, payload)
+
+
+if __name__ == "__main__":
+    #c = raw_input("Please select mode AE, AI, Send, Recv, IP, RecvIP : ")
+    c = sys.argv[1]
+    if c == "ARP_ETH":
+        print(sys.argv[2],sys.argv[3])
+        ARP_E(sys.argv[2],sys.argv[3])
+    elif c == "Send_Eth":
+        print(sys.argv[2],sys.argv[3],sys.argv[4])
+        Eth_S(sys.argv[2],sys.argv[3],sys.argv[4])
+    elif c =="Recv_ETH":
+        print(sys.argv[2])
+        Eth_R(sys.argv[2])
+    elif c == "Send":
+        print(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5])
+        IP_SR(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5])
+    elif c == "Send_R":
+        print(sys.argv[2],sys.argv[3],sys.argv[4])
+        IP_S(sys.argv[2],sys.argv[3],sys.argv[4])
+    elif c == "ARP_Eth":
+        print(sys.argv[2],sys.argv[3])
+        ARP_I(sys.argv[2],sys.argv[3])
+    elif c =="Recv":
+        print(sys.argv[2])
+        IP_R(sys.argv[2])
+    else:
+        print("Not a correct input!")
+        print("Please use one of the following templates:")
+        print("1.) python 455_proj3.py Send_R <InterfaceName> <DestIP> <Message>")
+        print("^ For this template RouterIP has been set in the code for the given self IP")
+        print
+        print("2.) python 455_proj3.py Send <InterfaceName> <DestIP> <RouterIP <Message>")
+        print("^ For this template the Router IP must be specified")
+        print
+        print("For Recv use the template:")
+        print("python 455_proj3.py Recv <Interface>")
+
